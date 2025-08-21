@@ -8,48 +8,67 @@ def flash_attention(q, k, v):
     d = 1
 
     # step 1
-    Bc = M / (4 * d)
-    Br = min((M / (4 * d)), d)
+    # should be ints
+    Bc = M // (4 * d)
+    Br = min((M // (4 * d)), d)
 
     # step 2
     O = torch.zeros(N,d)
     l = torch.zeros(N)
-    m = torch.full(N, fill_value=-np.inf)
+    m = torch.full((N,), fill_value=-np.inf)
 
     # step 3/4
-    Tr = N / Br
-    Tc = N / Bc
+    # should be ints
+    Tr = N // Br
+    Tc = N // Bc
 
     # step 5
     for j in range(0, Tc):
-        Kj = k[j:j+Tc]
-        Vj = v[j:j+Tc]
+        # for each j, we move forward Bc rows
+        Kj = k[j*Bc:(j+1)*Bc]
+        Vj = v[j*Bc:(j+1)*Bc]
 
         for i in range(0, Tr):
-            Qi = q[i:i+Tr]
-            Oi = O[i:i+Tr]
-            li = l[i:i+Tr]
-            mi = m[i:i+Tr]
-            
+            # for each i, we move forward Br rows
+            Qi = q[i*Br:(i+1)*Br]
+            Oi = O[i*Br:(i+1)*Br]
+            li = l[i*Br:(i+1)*Br]
+            mi = m[i*Br:(i+1)*Br]
+
             Sij = torch.matmul(Qi, Kj.T)
             assert Sij.size() == (Br, Bc), f"Expected Sij size (Br, Bc), got {Sij.size()}"
 
-            mij = torch.max(Sij, dim=1) #dim=1 is rows
+            mij = torch.max(Sij, dim=1).values #dim=1 is rows
             assert mij.size() == (Br,), f"Expected mij size (Br,), got {mij.size()}"
             
-            Pij = torch.exp(Sij - mij)
+            Pij = torch.exp(Sij - mij[:, None])  # mij needs to go from (Br,) -> (Br, 1)
             assert Pij.size() == (Br, Bc), f"Expected Pij size (Br, Bc), got {Pij.size()}"
 
             lij = torch.sum(Pij, dim=1)
             
-            mi_new = max(mi, mij)
+            mi_new = torch.max(mi, mij)
             li_new = torch.exp(mi - mi_new) * li + torch.exp(mij- mi_new) * lij
 
-            Oi = (torch.diag(li) * torch.exp(mi - mi_new) * Oi + torch.exp(mij - mi_new) * torch.matmul(Pij, Vj)) / torch.diag(li_new)
+            # li has size (Br,) -> do same as above to convert to (Br, 1)
+            # mi and mi_new have size (Br,) -> do same as above to convert to (Br, 1)
+            # Oi has size (Br, d)
+            # PijVj has size (Br, Bc) x (Bc, d) = (Br, d)
 
-            li = li_new
-            mi = mi_new
-        
+            Oi_numerator = li[:, None] * torch.exp(mi - mi_new)[:, None] * Oi + torch.exp(mij - mi_new)[:, None] * torch.matmul(Pij, Vj)
+
+            # li_new has size (Br,) -> do same as above to convert to (Br, 1)
+            Oi_denominator = li_new[:, None] 
+
+            # Oi_new has size (Br, d)
+            Oi_new = Oi_numerator / Oi_denominator
+            assert Oi_new.size() == (Br, d), f"Expected Oi_new size (Br, d), got {Oi_new.size()}"
+            assert Oi.size() == (Br, d), f"Expected Oi size (Br, d), got {Oi.size()}"
+            
+            # write back to the actual O, l, m
+            O[i*Br:(i+1)*Br] = Oi_new
+            l[i*Br:(i+1)*Br] = li_new
+            m[i*Br:(i+1)*Br] = mi_new
+
     return O
 
 #     return torch.tensor([
