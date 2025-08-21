@@ -56,8 +56,13 @@ class TestAttention(unittest.TestCase):
         self.assertEqual(result.shape, self.v.shape)
         self.assertTrue(np.allclose(result, expected, rtol=1e-1))
 
-    def test_attention_one(self):
-        actual = attention.flash_attention(self.k, self.q, self.v)
+    def test_attention_m32(self):
+        actual = attention.flash_attention(self.k, self.q, self.v, M=32)
+        expected = forward(self.k, self.q, self.v)
+        self.assertTrue(np.allclose(actual, expected, rtol=1e-1))
+
+    def test_attention_m36(self):
+        actual = attention.flash_attention(self.k, self.q, self.v, M=36)
         expected = forward(self.k, self.q, self.v)
         self.assertTrue(np.allclose(actual, expected, rtol=1e-1))
 

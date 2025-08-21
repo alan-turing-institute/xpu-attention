@@ -1,16 +1,19 @@
 import torch
 import numpy as np
+import math
 
-def flash_attention(q, k, v):
+def flash_attention(q, k, v, M):
     N, d = q.size()
-
-    M = 4
-    d = 1
+    print(f"{N=}, {d=}")
 
     # step 1
     # should be ints
-    Bc = M // (4 * d)
-    Br = min((M // (4 * d)), d)
+    if M < (4 * d):
+        raise ValueError(f"M ({M}) must be at least 4 times d ({d}) for flash attention to work efficiently.")
+    
+    Bc = min(math.ceil(M / (4 * d)), N)
+    Br = min(math.ceil(M / (4 * d)), d)
+    print(f"{Bc=}, {Br=}")
 
     # step 2
     O = torch.zeros(N,d)
@@ -19,8 +22,8 @@ def flash_attention(q, k, v):
 
     # step 3/4
     # should be ints
-    Tr = N // Br
-    Tc = N // Bc
+    Tr = math.ceil(N / Br)
+    Tc = math.ceil(N / Bc)
 
     # step 5
     for j in range(0, Tc):
@@ -36,13 +39,10 @@ def flash_attention(q, k, v):
             mi = m[i*Br:(i+1)*Br]
 
             Sij = torch.matmul(Qi, Kj.T)
-            assert Sij.size() == (Br, Bc), f"Expected Sij size (Br, Bc), got {Sij.size()}"
 
             mij = torch.max(Sij, dim=1).values #dim=1 is rows
-            assert mij.size() == (Br,), f"Expected mij size (Br,), got {mij.size()}"
             
             Pij = torch.exp(Sij - mij[:, None])  # mij needs to go from (Br,) -> (Br, 1)
-            assert Pij.size() == (Br, Bc), f"Expected Pij size (Br, Bc), got {Pij.size()}"
 
             lij = torch.sum(Pij, dim=1)
             
@@ -57,13 +57,11 @@ def flash_attention(q, k, v):
             Oi_numerator = li[:, None] * torch.exp(mi - mi_new)[:, None] * Oi + torch.exp(mij - mi_new)[:, None] * torch.matmul(Pij, Vj)
 
             # li_new has size (Br,) -> do same as above to convert to (Br, 1)
-            Oi_denominator = li_new[:, None] 
+            Oi_denominator = li_new[:, None]
 
             # Oi_new has size (Br, d)
             Oi_new = Oi_numerator / Oi_denominator
-            assert Oi_new.size() == (Br, d), f"Expected Oi_new size (Br, d), got {Oi_new.size()}"
-            assert Oi.size() == (Br, d), f"Expected Oi size (Br, d), got {Oi.size()}"
-            
+
             # write back to the actual O, l, m
             O[i*Br:(i+1)*Br] = Oi_new
             l[i*Br:(i+1)*Br] = li_new
